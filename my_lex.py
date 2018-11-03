@@ -154,18 +154,22 @@ class NFA:
 
         # implement a BFS to print nodes information
         result = ''
-        nodes_queue = deque(self.start_node)
+        nodes_queue = deque()
+        nodes_queue.append(self.start_node)
         visited_nodes = []
         while len(nodes_queue) != 0:
             curr_state = nodes_queue.popleft()
             visited_nodes.append(curr_state)
             # this may need improved, the cost of this may be too high
-            for key in self._map.keys():
-                if curr_state in key:
-                    result += '{} -{}-> {}'.format(curr_state, key[1], self._map[key])
-                    if self._map[key] not in visited_nodes:
-                        nodes_queue.append(self._map[key])
-                result += '\n'
+            for state, action in self._map.keys():
+                if curr_state == state:
+                    next_states = self._map[state, action]
+                    # add not visited state to the end of the queue
+                    for s in next_states:
+                        result += '{} -{}-> {}; '.format(state, action, s)
+                        if s not in visited_nodes:
+                            nodes_queue.append(s)
+            result += '\n'
         return result
 
     def add_edge(self, source, action, target):
