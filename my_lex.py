@@ -146,13 +146,11 @@ class NFA:
 
     def __init__(self):
         self.start_node = None
-        self.final_nodes = []
+        self.final_nodes = set()
         self.moves = {}
+        self.final_states_related_re = {}
         self._state_count = 0
         self.nodes_count = 0
-
-    def __getitem__(self, *state_and_action):
-        return self.moves[state_and_action]
 
     def __str__(self):
         if self.start_node is None:
@@ -177,6 +175,15 @@ class NFA:
                             nodes_queue.append(s)
             result += '\n'
         return result
+
+    def bond_re_to_final_state(self, state, regular_expr):
+        if state not in self.final_nodes:
+            raise ValueError("State is not a final state")
+
+        if self.final_states_related_re.get(state) is not None:
+            raise ValueError("State's regular expression has already been assigned")
+
+        self.final_states_related_re[state] = regular_expr
 
     def add_edge(self, source, action, target):
         if self.moves.get((source, action)) is None:
@@ -299,7 +306,8 @@ def construct_nfa(regular_expr):
     assert len(stack) == 1
     head, tail = stack.pop()
     nfa.start_node = head
-    nfa.final_nodes.append(tail)
+    nfa.final_nodes.add(tail)
+    nfa.bond_re_to_final_state(tail, regular_expr)
 
     return nfa
 
@@ -324,10 +332,10 @@ class DFA:
         if state not in self.final_states:
             raise ValueError("State is not a final state")
 
-        if self.final_states_related_re.get(state) is None:
-            self.final_states_related_re[state] = []
+        if self.final_states_related_re.get(state) is not None:
+            raise ValueError("State's regular expression has already been assigned")
 
-        self.final_states_related_re[state].append(regular_expr)
+        self.final_states_related_re[state] = regular_expr
 
     def _get_id_for_states(self, states):
         # allocate an id for the states if it's not recorded yet
@@ -362,7 +370,7 @@ class DFA:
             the target DFA
         """
 
-        start_states = nfa.epsilon_closure((nfa.start_node, ))  # epsilon_closure returns a tuple of states
+        start_states = nfa.epsilon_closure((nfa.start_node,))  # epsilon_closure returns a tuple of states
         state_queue = deque()  # this queue should only contains tuple of state
         state_queue.append(start_states)
         visited_states = set()
@@ -390,7 +398,19 @@ class DFA:
                 states.update(nfa.epsilon_closure(states))
 
                 states_tuple = tuple(states)
-                dfa.moves[curr_state_id, action] = dfa._get_id_for_states(states_tuple)
+                states_id = dfa._get_id_for_states(states_tuple)
+                dfa.moves[curr_state_id, action] = states_id
+
+                # see if it's a final state, if this state contains more
+                # than one final state of NFA, then choose the regular
+                # expression of the first final state in the nfa.final_nodes
+                # as this DFA final state's related regular expression
+                for final_state in nfa.final_nodes:
+                    if final_state in states:
+                        dfa.final_states.add(states_id)
+                        dfa._bond_re_to_final_states(states_id, nfa.final_states_related_re[final_state])
+                        break
+
                 # add not visited states to state_queue
                 if states_tuple not in visited_states:
                     state_queue.append(states_tuple)
