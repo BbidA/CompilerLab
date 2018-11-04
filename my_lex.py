@@ -7,6 +7,7 @@ import re
 import copy
 from collections import deque
 from functools import reduce
+from itertools import groupby
 
 # ----------------------------------------------------------
 # transform regular expression to its postfix form
@@ -148,6 +149,7 @@ class NFA:
     def __init__(self):
         self.start_node = None
         self.final_nodes = set()
+        self.non_epsilon_actions = set()
         self.moves = {}
         self.final_states_related_re = {}
         self._state_count = 0
@@ -196,6 +198,9 @@ class NFA:
     def add_edge(self, source, action, target):
         if self.moves.get((source, action)) is None:
             self.moves[source, action] = set()
+
+        if action != _epsilon:
+            self.non_epsilon_actions.add(action)
 
         self.moves[source, action].add(target)
 
@@ -300,20 +305,22 @@ class NFA:
         return result
 
     def merge(self, others):
+        result = copy.deepcopy(self)
         for other in others:
             assert isinstance(other, NFA)
-            other = other.states_id_all_add(self._state_count)
-            self._state_count += (other._state_count + 1)
+            other = other.states_id_all_add(result._state_count)
+            result._state_count += (other._state_count + 1)
 
-            # add an epsilon link between self.start_node and other.start_node
-            self.add_epsilon_edge(self.start_node, other.start_node)
+            # add an epsilon link between result.start_node and other.start_node
+            result.add_epsilon_edge(result.start_node, other.start_node)
 
-            self.final_nodes.update(other.final_nodes)
-            self.moves.update(other.moves)
-            self.nodes_count += other.nodes_count
-            self.final_states_related_re.update(other.final_states_related_re)
+            result.final_nodes.update(other.final_nodes)
+            result.moves.update(other.moves)
+            result.nodes_count += other.nodes_count
+            result.final_states_related_re.update(other.final_states_related_re)
+            result.non_epsilon_actions.update(other.non_epsilon_actions)
 
-        return self
+        return result
 
 
 def construct_nfa(regular_expr):
@@ -380,20 +387,24 @@ class DFA:
 
     def __init__(self):
         self.start_state = None
+        self.non_final_states = set()
         self.final_states = set()
-        self.nodes_count = 0
         self.moves = {}
         self.final_states_related_re = {}
+        self.actions = set()
 
         self._states_id = {}
         self._state_count = 0
+
+    def __getitem__(self, *state_action):
+        return self.moves.get(state_action, None)
 
     def _bond_re_to_final_states(self, state, regular_expr):
         if state not in self.final_states:
             raise ValueError("State is not a final state")
 
         if self.final_states_related_re.get(state) is not None:
-            raise ValueError("State's regular expression has already been assigned")
+            return
 
         self.final_states_related_re[state] = regular_expr
 
@@ -409,11 +420,16 @@ class DFA:
             self._states_id[states] = allocated_id
         return allocated_id
 
+    @property
+    def nodes_count(self):
+        return len(self.non_final_states) + len(self.final_states)
+
     def add_edge(self, source, action, target):
         if self.moves.get((source, action)) is None:
             self.moves[source, action] = set()
 
         self.moves[source, action].add(target)
+        self.actions.add(action)
 
     @classmethod
     def subset_construction(cls, nfa):
@@ -437,6 +453,10 @@ class DFA:
 
         dfa = cls()
         dfa.start_state = dfa._get_id_for_states(start_states)
+        dfa.non_final_states.add(dfa.start_state)
+
+        # update dfa actions
+        dfa.actions = nfa.non_epsilon_actions
 
         while len(state_queue) != 0:
             curr_states = state_queue.popleft()
@@ -463,15 +483,119 @@ class DFA:
 
                 # see if it's a final state, if this state contains more
                 # than one final state of NFA, then choose the regular
-                # expression of the first final state in the nfa.final_nodes
-                # as this DFA final state's related regular expression
-                for final_state in nfa.final_nodes:
+                # expression of the final state with minimum id in the
+                # nfa.final_nodes as this DFA final state's related
+                # regular expression
+                for final_state in sorted(nfa.final_nodes):
                     if final_state in states:
                         dfa.final_states.add(states_id)
                         dfa._bond_re_to_final_states(states_id, nfa.final_states_related_re[final_state])
                         break
+                else:
+                    dfa.non_final_states.add(states_id)
 
                 # add not visited states to state_queue
                 if states_tuple not in visited_states:
                     state_queue.append(states_tuple)
-        return dfa
+
+        return dfa._simplify()
+
+    def _simplify(self):
+        # initially divide final states into groups
+        final_states_groups = {}
+        for state, regular_expr in self.final_states_related_re.items():
+            if final_states_groups.get(regular_expr) is None:
+                final_states_groups[regular_expr] = []
+
+            final_states_groups[regular_expr].append(state)
+
+        # add non-final states to groups
+        groups = [self.non_final_states]
+
+        for regular_expr, states in final_states_groups.items():
+            groups.append(set(states))
+
+        prev_groups = []
+        while prev_groups != groups:
+            prev_groups = groups
+            new_groups = []
+            for i in range(len(groups)):
+                group = groups[i]
+                # just divide a group to two small groups in every iteration
+                group_1 = set()
+                group_2 = set()
+                flag_node = next(iter(group), None)  # fetch first node of this group as the flag
+                if flag_node is None:
+                    print("Oh shit")
+                # test action on nodes of one group
+                test_groups = _construct_test_group(new_groups, groups, i)
+
+                for node in group:
+                    if all(_weak_equivalent_on_action(self.__getitem__(node, action),
+                                                      self.__getitem__(flag_node, action),
+                                                      test_groups)
+                           for action in self.actions):
+                        group_1.add(node)
+                    else:
+                        group_2.add(node)
+
+                new_groups.append(group_1)
+                if len(group_2) > 0:
+                    new_groups.append(group_2)
+
+            groups = new_groups
+
+        # construct simplified dfa
+        simplified_dfa = DFA()
+        for group in groups:
+            states_id = simplified_dfa._get_id_for_states(group)
+
+            if self.start_state in group:
+                simplified_dfa.start_state = states_id
+                simplified_dfa.non_final_states.add(states_id)
+            elif group.issubset(self.final_states):
+                simplified_dfa.final_states.add(states_id)
+                # add related regular expression to simplified dfa
+                node = next(iter(group))
+                assert node in self.final_states
+                simplified_dfa.final_states_related_re[states_id] = self.final_states_related_re[node]
+            else:
+                simplified_dfa.non_final_states.add(states_id)
+
+        simplified_dfa.actions = set(self.actions)
+
+        for action in self.actions:
+            for group in groups:
+                # fetching one node is enough
+                node = next(iter(group))
+                assert node is not None
+                # establish new links between new states
+                target_state = self.__getitem__(node, action)
+                if target_state is not None:
+                    # find target_state's group
+                    target_id = simplified_dfa._get_id_for_states(_get_group(target_state, groups))
+                    simplified_dfa.moves[simplified_dfa._get_id_for_states(group), action] = target_id
+
+        return simplified_dfa
+
+
+def _get_group(state, groups):
+    for group in groups:
+        if state in group:
+            return group
+    assert False
+
+
+def _weak_equivalent_on_action(state, flag_state, groups):
+    if state == flag_state:
+        return True
+    elif state is None or flag_state is None:
+        return False
+    else:
+        flag_group = next((group for group in groups if flag_state in group), None)
+        assert flag_group is not None
+        return state in flag_group
+
+
+def _construct_test_group(new_groups, old_groups, old_groups_split_index):
+    return new_groups + old_groups[old_groups_split_index:]
