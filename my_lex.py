@@ -4,6 +4,7 @@
 # Transform NFA to DFA
 import abc
 import re
+import copy
 from collections import deque
 from functools import reduce
 
@@ -160,10 +161,16 @@ class NFA:
         result = ''
         nodes_queue = deque()
         nodes_queue.append(self.start_node)
-        visited_nodes = []
+        visited_nodes = set()
         while len(nodes_queue) != 0:
             curr_state = nodes_queue.popleft()
-            visited_nodes.append(curr_state)
+            visited_nodes.add(curr_state)
+
+            # jump the final state
+            if curr_state in self.final_nodes:
+                result += '{} is final\n'.format(curr_state)
+                continue
+
             # this may need improved, the cost of this may be too high
             for state, action in self.moves.keys():
                 if curr_state == state:
@@ -171,9 +178,10 @@ class NFA:
                     # add not visited state to the end of the queue
                     for s in next_states:
                         result += '{} -{}-> {}; '.format(state, action, s)
-                        if s not in visited_nodes:
+                        if s not in visited_nodes and s not in nodes_queue:
                             nodes_queue.append(s)
             result += '\n'
+
         return result
 
     def bond_re_to_final_state(self, state, regular_expr):
@@ -261,6 +269,52 @@ class NFA:
 
         return head_node, last_node
 
+    def states_id_all_add(self, number):
+        result = copy.deepcopy(self)
+        # update state count
+        result._state_count += number
+
+        # update start_node
+        result.start_node += number
+
+        # update final nodes
+        final_nodes = set()
+        for node in result.final_nodes:
+            final_nodes.add(node + number)
+        result.final_nodes = final_nodes
+
+        # update moves
+        new_moves = {}
+        for (from_state, action), to_state in result.moves.items():
+            new_to_state = set()
+            for s in to_state:
+                new_to_state.add(s + number)
+            new_moves[from_state + number, action] = new_to_state
+        result.moves = new_moves
+
+        # update final nodes related regular expression
+        new_relations = {}
+        for node, regular_expr in result.final_states_related_re.items():
+            new_relations[node + number] = regular_expr
+        result.final_states_related_re = new_relations
+        return result
+
+    def merge(self, others):
+        for other in others:
+            assert isinstance(other, NFA)
+            other = other.states_id_all_add(self._state_count)
+            self._state_count += (other._state_count + 1)
+
+            # add an epsilon link between self.start_node and other.start_node
+            self.add_epsilon_edge(self.start_node, other.start_node)
+
+            self.final_nodes.update(other.final_nodes)
+            self.moves.update(other.moves)
+            self.nodes_count += other.nodes_count
+            self.final_states_related_re.update(other.final_states_related_re)
+
+        return self
+
 
 def construct_nfa(regular_expr):
     """Construct NFA for a regular expression
@@ -310,6 +364,12 @@ def construct_nfa(regular_expr):
     nfa.bond_re_to_final_state(tail, regular_expr)
 
     return nfa
+
+
+def integrate_multi_nfa(multi_nfa):
+    result = NFA()
+    result.start_node = 'x'
+    return result.merge(multi_nfa)
 
 
 # ------------------------------------------------------------
