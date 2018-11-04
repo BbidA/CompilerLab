@@ -2,21 +2,20 @@
 # RE -> DFA
 # Integrate multi DFAs to a NFA
 # Transform NFA to DFA
-import abc
-import re
 import copy
 from collections import deque
 from functools import reduce
-from itertools import groupby
 
 # ----------------------------------------------------------
 # transform regular expression to its postfix form
 
 _cat = '•'
 
-_priority_table = {_cat: 0, '|': 1, '*': 2}
+_priority_table = {_cat: 0, '|': 1, '*': 2, '?': 2}
 
-_operators = (_cat, '|', '*', '+', '?', '(', ')', '{', '}')
+_operators = (_cat, '|', '*', '?', '(', ')', '{', '}')
+
+_escaped_characters = ('\t', '\n')
 
 
 def _is_action(character: str):
@@ -40,8 +39,15 @@ def to_postfix(regular_expr):
     regular_expr = _pre_process_regular_expr(regular_expr)
     stack = []
     postfix = ''
-    for ch in regular_expr:
-        if ch.isalpha() or ch.isdigit():
+    for i in range(len(regular_expr)):
+        ch = regular_expr[i]
+        if i > 1 and regular_expr[i - 1] == '\\':
+            postfix += ch
+            continue
+        elif ch == '\\':
+            continue
+
+        if _is_action(ch):
             postfix += ch
         elif ch == '(':
             stack.append(ch)
@@ -52,7 +58,7 @@ def to_postfix(regular_expr):
         else:
             while len(stack) != 0 and stack[-1] != '(' and _priority_table[stack[-1]] >= _priority_table[ch]:
                 postfix += stack.pop()
-            if ch == '*':
+            if ch == '*' or ch == '?':
                 # star operator just append to the postfix, no need
                 # to push into the stack
                 postfix += ch
@@ -80,9 +86,6 @@ def _pre_process_regular_expr(regular_expr):
 
     """
     regular_expr = _process_square_brackets_expr(regular_expr)
-    regular_expr = _replace_brace_content(regular_expr)
-    regular_expr = _transform_plus_sign(regular_expr)
-    regular_expr = _transform_question_mark(regular_expr)
     return _add_cat_operator(regular_expr)
 
 
@@ -93,16 +96,16 @@ def _add_cat_operator(regular_expr):
         result += curr_char
         next_char = regular_expr[i + 1]
 
-        if curr_char == '(' or curr_char == '|':
+        if curr_char == '(' or curr_char == '|' or curr_char == '\\':
             continue
-        elif next_char.isalpha() or next_char.isdigit() or next_char == '(':
+        elif _is_action(next_char) or next_char == '(':
             result += _cat
     result += regular_expr[-1]
     return result
 
 
 def _process_square_brackets_expr(regular_expr):
-    matches = re.findall(r'\[.*\]', regular_expr)
+    matches = _find_all_square_brackets(regular_expr)
     for m in matches:
         result = []
         for i in range(1, len(m) - 1):
@@ -119,12 +122,52 @@ def _process_square_brackets_expr(regular_expr):
     return regular_expr
 
 
-def _transform_dot_sign(regular_expr):
-    pass
+def _find_all_square_brackets(regular_expr: str):
+    result = []
+    for i in range(len(regular_expr) - 1):
+        # process escape character
+        if (regular_expr[i] == '[' and i > 0 and regular_expr[i - 1] != '\\') or (i == 0 and regular_expr[i] == '['):
+            pointer = i + 1
+            while pointer < len(regular_expr) and (regular_expr[pointer] != ']' or regular_expr[pointer - 1] == '\\'):
+                pointer += 1
+            if pointer == len(regular_expr):
+                raise ValueError("Invalid [ at {}".format(i))
+            else:
+                result.append(regular_expr[i:pointer + 1])
+
+    return result
+
+
+def _transform_dot_sign(regular_expr: str):
+    dot_replacement = _process_square_brackets_expr('[ -~]')
+    result = ''
+    if regular_expr[0] == '.':
+        result += dot_replacement
+    for i in range(1, len(regular_expr)):
+        if regular_expr[i] == '.' and regular_expr[i - 1] != '\\':
+            result += dot_replacement
+        else:
+            result += regular_expr[i]
+
+    return result
 
 
 def _transform_plus_sign(regular_expr):
-    # todo
+    if regular_expr[0] == '+':
+        raise ValueError("+ is invalid at position 0")
+
+    result = ''
+    for i in range(1, len(regular_expr)):
+        if regular_expr[i] == '+' and regular_expr[i - 1] != '\\':
+            prev_ch = regular_expr[i - 1]
+            if prev_ch == ')':
+                pointer = i - 1
+                while pointer >= 0 and regular_expr[pointer] != '(':
+                    pointer -= 1
+                if pointer < 0:
+                    raise ValueError(") is invalid in position {}".format(i))
+        else:
+            result += regular_expr[i]
     return regular_expr
 
 
@@ -185,6 +228,10 @@ class NFA:
             result += '\n'
 
         return result
+
+    @property
+    def sorted_final_nodes(self):
+        return sorted(self.final_nodes)
 
     def bond_re_to_final_state(self, state, regular_expr):
         if state not in self.final_nodes:
@@ -253,6 +300,10 @@ class NFA:
 
         return head_node, last_node
 
+    def new_question_mark_nfa(self, nodes):
+        self.add_epsilon_edge(nodes[0], nodes[1])
+        return nodes
+
     def epsilon_closure(self, states):
         closure_set = set()
         closure_set.update(states)
@@ -264,7 +315,7 @@ class NFA:
                 if from_state in closure_set and action == _epsilon:
                     closure_set.update(to_states_set)
 
-        return tuple(closure_set)
+        return frozenset(closure_set)
 
     def _allocate_nodes(self):
         head_node = self._state_count
@@ -341,10 +392,21 @@ def construct_nfa(regular_expr):
     stack = []
     nfa = NFA()
 
-    for ch in postfix:
+    for i in range(len(postfix)):
+        ch = postfix[i]
+        if i >= 1 and postfix[i - 1] == '\\':
+            stack.append(nfa.new_single_action(ch))
+
+        if ch == '\\':
+            continue
+
         if _is_action(ch):
             # ch is an action
             stack.append(nfa.new_single_action(ch))
+        elif ch == '?':
+            assert len(stack) > 0
+            head, tail = stack.pop()
+            stack.append(nfa.new_question_mark_nfa((head, tail)))
         elif ch == '*':
             assert len(stack) > 0 and isinstance(stack[-1], tuple)
             head, tail = stack.pop()
@@ -411,7 +473,7 @@ class DFA:
     def _get_id_for_states(self, states):
         # allocate an id for the states if it's not recorded yet
         # otherwise just return the recorded id
-        states = tuple(states)
+        states = frozenset(states)
         allocated_id = self._states_id.get(states)
 
         if allocated_id is None:
@@ -423,6 +485,37 @@ class DFA:
     @property
     def nodes_count(self):
         return len(self.non_final_states) + len(self.final_states)
+
+    def parse_string(self, string):
+        tokens = []
+        curr_state = self.start_state
+        pointer = 0
+        while pointer < len(string):
+            ch = string[pointer]
+            next_state = self.__getitem__(curr_state, ch)
+            if next_state is None:
+                token = self.get_state_related_re(curr_state)
+                tokens.append(self.get_state_related_re(curr_state))
+
+                if token == 'Invalid character':
+                    return tokens
+
+                if pointer + 1 == len(string):
+                    break
+                curr_state = self.start_state
+                pointer -= 1
+            else:
+                curr_state = next_state
+
+            pointer += 1
+
+        return tokens
+
+    def get_state_related_re(self, curr_state):
+        if curr_state in self.final_states:
+            return self.final_states_related_re[curr_state]
+        else:
+            return 'Invalid character'
 
     def add_edge(self, source, action, target):
         if self.moves.get((source, action)) is None:
@@ -475,10 +568,14 @@ class DFA:
             # find epsilon-closure for states in action_state
             # and add transitions to dfa
             for action, states in action_state.items():
-                states.update(nfa.epsilon_closure(states))
+                for existed_states in dfa._states_id.keys():
+                    if states.issubset(existed_states):
+                        states = existed_states
+                        break
+                else:
+                    states = nfa.epsilon_closure(states)
 
-                states_tuple = tuple(states)
-                states_id = dfa._get_id_for_states(states_tuple)
+                states_id = dfa._get_id_for_states(states)
                 dfa.moves[curr_state_id, action] = states_id
 
                 # see if it's a final state, if this state contains more
@@ -486,7 +583,7 @@ class DFA:
                 # expression of the final state with minimum id in the
                 # nfa.final_nodes as this DFA final state's related
                 # regular expression
-                for final_state in sorted(nfa.final_nodes):
+                for final_state in nfa.sorted_final_nodes:
                     if final_state in states:
                         dfa.final_states.add(states_id)
                         dfa._bond_re_to_final_states(states_id, nfa.final_states_related_re[final_state])
@@ -495,8 +592,8 @@ class DFA:
                     dfa.non_final_states.add(states_id)
 
                 # add not visited states to state_queue
-                if states_tuple not in visited_states:
-                    state_queue.append(states_tuple)
+                if states not in visited_states:
+                    state_queue.append(states)
 
         return dfa._simplify()
 
@@ -599,3 +696,6 @@ def _weak_equivalent_on_action(state, flag_state, groups):
 
 def _construct_test_group(new_groups, old_groups, old_groups_split_index):
     return new_groups + old_groups[old_groups_split_index:]
+
+# -------------------------------------------------------------
+# process input and output
