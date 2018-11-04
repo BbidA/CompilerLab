@@ -1,0 +1,42 @@
+[IF]
+
+[ID, 0]
+
+[RELOP, EQ]
+
+[ID, 1]
+
+[THEN]
+
+[ID, 2]
+
+[ELSE]
+
+[IF]
+
+[ID, 3]
+
+[RELOP, LE]
+
+[ID, 4]
+
+[THEN]
+
+[ID, 5]
+
+[IF]
+
+[ID, 6]
+
+[THEN]
+
+[ID, 7]
+
+[IF]
+
+[NUMBER, 0]
+
+[RELOP, GE]
+
+[NUMBER, 1]
+Invalid character
