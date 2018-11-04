@@ -2,6 +2,7 @@
 # RE -> DFA
 # Integrate multi DFAs to a NFA
 # Transform NFA to DFA
+import abc
 import re
 from collections import deque
 from functools import reduce
@@ -116,6 +117,10 @@ def _process_square_brackets_expr(regular_expr):
     return regular_expr
 
 
+def _transform_dot_sign(regular_expr):
+    pass
+
+
 def _transform_plus_sign(regular_expr):
     # todo
     return regular_expr
@@ -142,11 +147,12 @@ class NFA:
     def __init__(self):
         self.start_node = None
         self.final_nodes = []
-        self._map = {}
+        self.moves = {}
         self._state_count = 0
+        self.nodes_count = 0
 
     def __getitem__(self, *state_and_action):
-        return self._map[state_and_action]
+        return self.moves[state_and_action]
 
     def __str__(self):
         if self.start_node is None:
@@ -161,9 +167,9 @@ class NFA:
             curr_state = nodes_queue.popleft()
             visited_nodes.append(curr_state)
             # this may need improved, the cost of this may be too high
-            for state, action in self._map.keys():
+            for state, action in self.moves.keys():
                 if curr_state == state:
-                    next_states = self._map[state, action]
+                    next_states = self.moves[state, action]
                     # add not visited state to the end of the queue
                     for s in next_states:
                         result += '{} -{}-> {}; '.format(state, action, s)
@@ -173,10 +179,10 @@ class NFA:
         return result
 
     def add_edge(self, source, action, target):
-        if self._map.get((source, action)) is None:
-            self._map[source, action] = set()
+        if self.moves.get((source, action)) is None:
+            self.moves[source, action] = set()
 
-        self._map[source, action].add(target)
+        self.moves[source, action].add(target)
 
     def add_epsilon_edge(self, source, target):
         self.add_edge(source, _epsilon, target)
@@ -194,15 +200,16 @@ class NFA:
         # establish links between nodes1_tail and next states of nodes2_head
         to_be_popped = []
         to_be_append = {}
-        for state, action in self._map.keys():
+        for state, action in self.moves.keys():
             if nodes2_head == state:
-                to_be_append[nodes1_tail, action] = self._map[state, action]
+                to_be_append[nodes1_tail, action] = self.moves[state, action]
                 to_be_popped.append((state, action))
-        self._map.update(to_be_append)
+        self.moves.update(to_be_append)
 
         # remove nodes2_head links to other nodes
         for state_action in to_be_popped:
-            self._map.pop(state_action)
+            self.moves.pop(state_action)
+        self.nodes_count -= 1
 
         return nodes1[0], nodes2[1]
 
@@ -226,10 +233,24 @@ class NFA:
 
         return head_node, last_node
 
+    def epsilon_closure(self, states):
+        closure_set = set()
+        closure_set.update(states)
+        prev_closure = set()
+        # use iteration strategy to find the closure
+        while prev_closure != closure_set:
+            prev_closure.update(closure_set)
+            for (from_state, action), to_states_set in self.moves.items():
+                if from_state in closure_set and action == _epsilon:
+                    closure_set.update(to_states_set)
+
+        return tuple(closure_set)
+
     def _allocate_nodes(self):
         head_node = self._state_count
         last_node = self._state_count + 1
         self._state_count += 2
+        self.nodes_count += 2
 
         return head_node, last_node
 
@@ -281,3 +302,96 @@ def construct_nfa(regular_expr):
     nfa.final_nodes.append(tail)
 
     return nfa
+
+
+# ------------------------------------------------------------
+# construct dfa
+
+
+class DFA:
+
+    def __init__(self):
+        self.start_state = None
+        self.final_states = set()
+        self.nodes_count = 0
+        self.moves = {}
+        self.final_states_related_re = {}
+
+        self._states_id = {}
+        self._state_count = 0
+
+    def _bond_re_to_final_states(self, state, regular_expr):
+        if state not in self.final_states:
+            raise ValueError("State is not a final state")
+
+        if self.final_states_related_re.get(state) is None:
+            self.final_states_related_re[state] = []
+
+        self.final_states_related_re[state].append(regular_expr)
+
+    def _get_id_for_states(self, states):
+        # allocate an id for the states if it's not recorded yet
+        # otherwise just return the recorded id
+        states = tuple(states)
+        allocated_id = self._states_id.get(states)
+
+        if allocated_id is None:
+            allocated_id = self._state_count
+            self._state_count += 1
+            self._states_id[states] = allocated_id
+        return allocated_id
+
+    def add_edge(self, source, action, target):
+        if self.moves.get((source, action)) is None:
+            self.moves[source, action] = set()
+
+        self.moves[source, action].add(target)
+
+    @classmethod
+    def subset_construction(cls, nfa):
+        """Use subset construction to construct a DFA from an NFA
+
+        Parameters
+        ----------
+        nfa : NFA
+            the NFA which is used to construct the DFA
+
+        Returns
+        -------
+        dfa : DFA
+            the target DFA
+        """
+
+        start_states = nfa.epsilon_closure((nfa.start_node, ))  # epsilon_closure returns a tuple of states
+        state_queue = deque()  # this queue should only contains tuple of state
+        state_queue.append(start_states)
+        visited_states = set()
+
+        dfa = cls()
+        dfa.start_state = dfa._get_id_for_states(start_states)
+
+        while len(state_queue) != 0:
+            curr_states = state_queue.popleft()
+            curr_state_id = dfa._get_id_for_states(curr_states)
+            visited_states.add(curr_states)
+            action_state = {}  # used to record the action and its related next states
+
+            # find action-closure(curr_states) and save it with
+            # the related action to the action_state
+            for (from_state, action), to_states_set in nfa.moves.items():
+                if from_state in curr_states and action != _epsilon:
+                    if action_state.get(action) is None:
+                        action_state[action] = set()
+                    action_state[action].update(to_states_set)
+
+            # find epsilon-closure for states in action_state
+            # and add transitions to dfa
+            for action, states in action_state.items():
+                states.update(nfa.epsilon_closure(states))
+
+                states_tuple = tuple(states)
+                dfa.moves[curr_state_id, action] = dfa._get_id_for_states(states_tuple)
+                # add not visited states to state_queue
+                if states_tuple not in visited_states:
+                    state_queue.append(states_tuple)
+        return dfa
