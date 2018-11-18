@@ -34,19 +34,26 @@ class IDGenerator:
 
 id_gen = IDGenerator()
 
-actions = dict()
-actions[ws] = ''
-actions['if'] = '[IF]'
-actions['then'] = '[THEN]'
-actions['else'] = '[ELSE]'
-actions[t_id] = id_gen.next_id
-actions[number] = id_gen.next_number
-actions['<'] = '[RELOP, LE]'
-actions['<='] = '[RELOP, LE]'
-actions['='] = '[RELOP, EQ]'
-actions['<>'] = '[RELOP, NE]'
-actions['>'] = '[RELOP, GT]'
-actions['>='] = '[RELOP, GE]'
+actions = {
+    ws: '',
+    'if': '[IF]',
+    'then': '[THEN]',
+    'else': '[ELSE]',
+    'while': 'while',
+    '||': '||',
+    '+': '+',
+    '-': '-',
+    '{': '{',
+    '}': '}',
+    t_id: id_gen.next_id,
+    number: id_gen.next_number,
+    '<': '[RELOP, LE]',
+    '<=': '[RELOP, LE]',
+    '=': '[RELOP, EQ]',
+    '<>': '[RELOP, NE]',
+    '>': '[RELOP, GT]',
+    '>=': '[RELOP, GE]'
+}
 
 # construct the dfa
 regular_expression = [ws, 'if', 'then', 'else', t_id, number, '<', '<=', '=', '<>', '>', '>=']

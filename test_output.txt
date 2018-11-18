@@ -39,4 +39,7 @@
 [RELOP, GE]
 
 [NUMBER, 1]
-Invalid character
+
+[THEN]
+
+[ID, 8]

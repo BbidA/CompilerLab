@@ -4,182 +4,12 @@
 # Transform NFA to DFA
 import copy
 from collections import deque
-from functools import reduce
 
-# ----------------------------------------------------------
-# transform regular expression to its postfix form
+from regex_process import CAT, to_postfix, is_action
 
-_cat = '•'
+INVALID_CHARACTER = 'Invalid character'
 
-_priority_table = {_cat: 0, '|': 1, '*': 2, '?': 2}
-
-_operators = (_cat, '|', '*', '?', '(', ')', '{', '}')
-
-_escaped_characters = ('\t', '\n')
-
-
-def _is_action(character: str):
-    return character not in _operators
-
-
-def to_postfix(regular_expr):
-    """Transform the regular expression to postfix expression
-
-    Parameters
-    ----------
-    regular_expr: str
-        regular expression to be processed
-
-    Returns
-    -------
-    postfix_form: str
-        postfix form of this regular expression
-    """
-
-    regular_expr = _pre_process_regular_expr(regular_expr)
-    stack = []
-    postfix = ''
-    for i in range(len(regular_expr)):
-        ch = regular_expr[i]
-        if i > 1 and regular_expr[i - 1] == '\\':
-            postfix += ch
-            continue
-        elif ch == '\\':
-            continue
-
-        if _is_action(ch):
-            postfix += ch
-        elif ch == '(':
-            stack.append(ch)
-        elif ch == ')':
-            while stack[-1] != '(':
-                postfix += stack.pop()
-            stack.pop()
-        else:
-            while len(stack) != 0 and stack[-1] != '(' and _priority_table[stack[-1]] >= _priority_table[ch]:
-                postfix += stack.pop()
-            if ch == '*' or ch == '?':
-                # star operator just append to the postfix, no need
-                # to push into the stack
-                postfix += ch
-            else:
-                stack.append(ch)
-
-    for rest in stack:
-        postfix += rest
-
-    return postfix
-
-
-def _pre_process_regular_expr(regular_expr):
-    """Pre-process a regular expression to eliminate '[]'
-
-    Parameters
-    ----------
-    regular_expr: str
-        regular expression to be processed
-
-    Returns
-    -------
-    processed_re: str
-        regular expression without operator '[]'
-
-    """
-    regular_expr = _process_square_brackets_expr(regular_expr)
-    return _add_cat_operator(regular_expr)
-
-
-def _add_cat_operator(regular_expr):
-    result = ''
-    for i in range(len(regular_expr) - 1):
-        curr_char = regular_expr[i]
-        result += curr_char
-        next_char = regular_expr[i + 1]
-
-        if curr_char == '(' or curr_char == '|' or curr_char == '\\':
-            continue
-        elif _is_action(next_char) or next_char == '(':
-            result += _cat
-    result += regular_expr[-1]
-    return result
-
-
-def _process_square_brackets_expr(regular_expr):
-    matches = _find_all_square_brackets(regular_expr)
-    for m in matches:
-        result = []
-        for i in range(1, len(m) - 1):
-            if m[i - 1] == '-':
-                assert i - 2 > 0
-                for character in range(ord(m[i - 2]) + 1, ord(m[i]) + 1):
-                    result.append(chr(character))
-            elif m[i] == '-':
-                continue
-            else:
-                result.append(m[i])
-        replacement = '(' + reduce(lambda a, b: a + '|' + b, result) + ')'
-        regular_expr = regular_expr.replace(m, replacement)
-    return regular_expr
-
-
-def _find_all_square_brackets(regular_expr: str):
-    result = []
-    for i in range(len(regular_expr) - 1):
-        # process escape character
-        if (regular_expr[i] == '[' and i > 0 and regular_expr[i - 1] != '\\') or (i == 0 and regular_expr[i] == '['):
-            pointer = i + 1
-            while pointer < len(regular_expr) and (regular_expr[pointer] != ']' or regular_expr[pointer - 1] == '\\'):
-                pointer += 1
-            if pointer == len(regular_expr):
-                raise ValueError("Invalid [ at {}".format(i))
-            else:
-                result.append(regular_expr[i:pointer + 1])
-
-    return result
-
-
-def _transform_dot_sign(regular_expr: str):
-    dot_replacement = _process_square_brackets_expr('[ -~]')
-    result = ''
-    if regular_expr[0] == '.':
-        result += dot_replacement
-    for i in range(1, len(regular_expr)):
-        if regular_expr[i] == '.' and regular_expr[i - 1] != '\\':
-            result += dot_replacement
-        else:
-            result += regular_expr[i]
-
-    return result
-
-
-def _transform_plus_sign(regular_expr):
-    if regular_expr[0] == '+':
-        raise ValueError("+ is invalid at position 0")
-
-    result = ''
-    for i in range(1, len(regular_expr)):
-        if regular_expr[i] == '+' and regular_expr[i - 1] != '\\':
-            prev_ch = regular_expr[i - 1]
-            if prev_ch == ')':
-                pointer = i - 1
-                while pointer >= 0 and regular_expr[pointer] != '(':
-                    pointer -= 1
-                if pointer < 0:
-                    raise ValueError(") is invalid in position {}".format(i))
-        else:
-            result += regular_expr[i]
-    return regular_expr
-
-
-def _transform_question_mark(regular_expr):
-    # todo
-    return regular_expr
-
-
-def _replace_brace_content(regular_expr):
-    # todo
-    return regular_expr
-
+_cat = CAT
 
 # ---------------------------------------------------------
 # construct NFA
@@ -400,7 +230,7 @@ def construct_nfa(regular_expr):
         if ch == '\\':
             continue
 
-        if _is_action(ch):
+        if is_action(ch):
             # ch is an action
             stack.append(nfa.new_single_action(ch))
         elif ch == '?':
@@ -431,6 +261,16 @@ def construct_nfa(regular_expr):
     nfa.start_node = head
     nfa.final_nodes.add(tail)
     nfa.bond_re_to_final_state(tail, regular_expr)
+
+    return nfa
+
+
+def single_action_nfa(action):
+    nfa = NFA()
+    head, tail = nfa.new_single_action(action)
+    nfa.start_node = head
+    nfa.final_nodes.add(tail)
+    nfa.bond_re_to_final_state(tail, action)
 
     return nfa
 
@@ -497,7 +337,7 @@ class DFA:
                 token = self.get_state_related_re(curr_state)
                 tokens.append(self.get_state_related_re(curr_state))
 
-                if token == 'Invalid character':
+                if token == INVALID_CHARACTER:
                     return tokens
 
                 if pointer + 1 == len(string):
@@ -515,7 +355,7 @@ class DFA:
         if curr_state in self.final_states:
             return self.final_states_related_re[curr_state]
         else:
-            return 'Invalid character'
+            return INVALID_CHARACTER
 
     def add_edge(self, source, action, target):
         if self.moves.get((source, action)) is None:
@@ -697,5 +537,37 @@ def _weak_equivalent_on_action(state, flag_state, groups):
 def _construct_test_group(new_groups, old_groups, old_groups_split_index):
     return new_groups + old_groups[old_groups_split_index:]
 
+
 # -------------------------------------------------------------
 # process input and output
+
+class Lex:
+
+    def __init__(self, regular_expressions, regex_token_dict):
+        self.regular_expressions = regular_expressions
+        self.regex_token_dict = regex_token_dict
+        self._dfa = None
+
+        self._fit()
+
+    def _fit(self):
+        multi_nfa = []
+        for regular_expr in self.regular_expressions:
+            if len(regular_expr) == 1:
+                multi_nfa.append(single_action_nfa(regular_expr))
+            else:
+                multi_nfa.append(construct_nfa(regular_expr))
+        nfa = integrate_multi_nfa(multi_nfa)
+        self._dfa = DFA.subset_construction(nfa)
+
+    def parse(self, characters):
+
+        parsed_result = self._dfa.parse_string(characters)
+        result_tokens = []
+        for regular_expr in parsed_result:
+            if regular_expr == INVALID_CHARACTER:
+                raise ValueError("Invalid input")
+            else:
+                result_tokens.append(self.regex_token_dict[regular_expr])
+
+        return result_tokens

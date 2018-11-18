@@ -4,5 +4,5 @@ else if a < b
 then do_other_thing
 if if_not_happy
 then become_happy
-if 3 >= 9.42.dsf
+if 3 >= 9.42
 then its_impossible

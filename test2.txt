@@ -1,0 +1,11 @@
+i = 0;
+
+while (i < 30) {
+    if (i < 10 or i > 20) {
+        sum = sum + i;
+    } else {
+        sum = sum - 1;
+    }
+}
+
+a = 50 - sum / 2 + (sum + 3);
