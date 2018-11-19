@@ -340,14 +340,14 @@ class DFA:
                 if token == INVALID_CHARACTER:
                     return tokens
 
-                if pointer + 1 == len(string):
-                    break
                 curr_state = self.start_state
                 pointer -= 1
             else:
                 curr_state = next_state
 
             pointer += 1
+
+        tokens.append(self.get_state_related_re(curr_state))
 
         return tokens
 
